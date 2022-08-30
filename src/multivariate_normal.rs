@@ -133,6 +133,10 @@ impl Distribution for MultivariateNormal {
         -0.5 * (self.event_shape[0] as f64 * (2.0 * PI).ln() + m) - half_log_det
     }
 
+    fn sample(&self, shape: &[i64]) -> Tensor {
+        tch::no_grad(|| self.rsample(shape))
+    }
+
     fn batch_shape(&self) -> &[i64] {
         &self.batch_shape
     }
