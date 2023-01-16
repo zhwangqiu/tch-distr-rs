@@ -35,7 +35,7 @@ impl MultivariateNormal {
             .unwrap_or_else(Vec::new);
         let (event_shape, batch_shape) = split_shapes(&mean_size);
         Self {
-            mean: cov_mean[1].mean_dim(&[-1], false, cov_mean[1].kind()),
+            mean: cov_mean[1].mean_dim(Some([-1].as_slice()), false, cov_mean[1].kind()),
             scale_tril: cov.cholesky(false),
             cov: cov_mean[0].copy(),
             batch_shape,
@@ -64,7 +64,11 @@ impl MultivariateNormal {
             true,
         );
         Self {
-            mean: precision_mean[1].mean_dim(&[-1], false, precision_mean[1].kind()),
+            mean: precision_mean[1].mean_dim(
+                Some([-1].as_slice()),
+                false,
+                precision_mean[1].kind(),
+            ),
             scale_tril,
             cov,
             batch_shape,
@@ -92,7 +96,11 @@ impl MultivariateNormal {
             true,
         );
         Self {
-            mean: scale_tril_mean[1].mean_dim(&[-1], false, scale_tril_mean[1].kind()),
+            mean: scale_tril_mean[1].mean_dim(
+                Some([-1].as_slice()),
+                false,
+                scale_tril_mean[1].kind(),
+            ),
             scale_tril: scale_tril_mean[0].copy(),
             cov,
             batch_shape,
@@ -109,11 +117,11 @@ impl MultivariateNormal {
 
 impl Distribution for MultivariateNormal {
     fn entropy(&self) -> Tensor {
-        let half_log_det =
-            self.scale_tril
-                .diagonal(0, -2, -1)
-                .log()
-                .sum_dim_intlist(&[-1], true, Double);
+        let half_log_det = self.scale_tril.diagonal(0, -2, -1).log().sum_dim_intlist(
+            Some([-1].as_slice()),
+            true,
+            Double,
+        );
         let h = (0.5 * self.event_shape[0] as f64) * (1.0 + (2.0 * PI).ln()) + half_log_det;
         if self.batch_shape.is_empty() {
             h
@@ -125,11 +133,11 @@ impl Distribution for MultivariateNormal {
     fn log_prob(&self, val: &Tensor) -> Tensor {
         let diff = val - &self.mean;
         let m = batch_mahalanobis(&self.scale_tril, &diff).totype(Double);
-        let half_log_det =
-            self.scale_tril
-                .diagonal(0, -2, -1)
-                .log()
-                .sum_dim_intlist(&[-1], true, Double);
+        let half_log_det = self.scale_tril.diagonal(0, -2, -1).log().sum_dim_intlist(
+            Some([-1].as_slice()),
+            true,
+            Double,
+        );
         -0.5 * (self.event_shape[0] as f64 * (2.0 * PI).ln() + m) - half_log_det
     }
 
@@ -196,7 +204,7 @@ fn batch_mahalanobis(b_l: &Tensor, b_x: &Tensor) -> Tensor {
         .triangular_solve(&flat_l, false, false, false)
         .0
         .pow_tensor_scalar(2)
-        .sum_dim_intlist(&[-2], true, Float);
+        .sum_dim_intlist(Some([-2].as_slice()), true, Float);
     let m = m_swap.transpose(0, 1);
 
     let permuted_m = m.reshape(&b_x_batch_shape);
