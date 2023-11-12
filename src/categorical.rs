@@ -109,7 +109,7 @@ impl Distribution for Categorical {
         let value_log_pmf_vec = Tensor::broadcast_tensors(&[value, self.logits.copy()]);
         let value = &value_log_pmf_vec[0];
         let log_pmf = &value_log_pmf_vec[1];
-        let tensor_index = Tensor::of_slice(&[0]).to_device(value.device());
+        let tensor_index = Tensor::from_slice(&[0]).to_device(value.device());
         let value = value.index_select(-1, &tensor_index);
         log_pmf.gather(-1, &value, false).squeeze_dim(-1)
     }
