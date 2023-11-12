@@ -19,9 +19,7 @@ struct PyEnv<'py> {
 }
 
 impl<'py> PyEnv<'py> {
-    fn new(gil: &'py GILGuard) -> Self {
-        let py = gil.python();
-
+    fn new(py: Python<'py>) -> Self {
         let torch = PyModule::import(py, "torch").unwrap();
         let distributions = PyModule::import(py, "torch.distributions").unwrap();
         let kl = PyModule::import(py, "torch.distributions.kl").unwrap();
@@ -50,20 +48,20 @@ impl Default for TestCases {
             log_prob: Some(vec![
                 1.0.into(),
                 2.0.into(),
-                Tensor::of_slice(&[1.0, 1.0]),
-                Tensor::of_slice(&[2.0, 2.0]),
+                Tensor::from_slice(&[1.0, 1.0]),
+                Tensor::from_slice(&[2.0, 2.0]),
             ]),
             cdf: Some(vec![
                 1.0.into(),
                 2.0.into(),
-                Tensor::of_slice(&[1.0, 1.0]),
-                Tensor::of_slice(&[2.0, 2.0]),
+                Tensor::from_slice(&[1.0, 1.0]),
+                Tensor::from_slice(&[2.0, 2.0]),
             ]),
             icdf: Some(vec![
                 0.5.into(),
                 0.7.into(),
-                Tensor::of_slice(&[0.3, 0.4]),
-                Tensor::of_slice(&[0.2, 0.7]),
+                Tensor::from_slice(&[0.3, 0.4]),
+                Tensor::from_slice(&[0.2, 0.7]),
             ]),
             sample: None,
         }
@@ -113,13 +111,15 @@ fn assert_tensor_eq<'py>(py: Python<'py>, t: &Tensor, py_t: &PyAny) {
     println!("python pyarray1:{}", python_side_array); // type:&PyArrayDyn<f64>
     println!("===========1===========\n");
 
-    let python_side_array = python_side_array.as_cell_slice().unwrap();
-    let rust_side_array = rust_side_array.as_cell_slice().unwrap();
-    // println!("rust pyarray2:{:?}", rust_side_array);
-    // println!("python pyarray2:{:?}", python_side_array);
-    // println!("===========2===========\n");
-    assert_eq!(rust_side_array, python_side_array);
-    // println!("===========after assertion===========\n");
+    unsafe {
+        let python_side_array = python_side_array.as_slice().unwrap();
+        let rust_side_array = rust_side_array.as_slice().unwrap();
+        // println!("rust pyarray2:{:?}", rust_side_array);
+        // println!("python pyarray2:{:?}", python_side_array);
+        // println!("===========2===========\n");
+        assert_eq!(rust_side_array, python_side_array);
+        // println!("===========after assertion===========\n");
+    }
 }
 
 fn test_entropy<D: Distribution>(py_env: &PyEnv, dist_rs: &D, dist_py: &PyAny) {
@@ -244,742 +244,769 @@ where
 #[test]
 #[serial]
 fn normal() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    let args: Vec<(Tensor, Tensor)> = vec![
-        (1.0.into(), 2.0.into()),
-        (2.0.into(), 4.0.into()),
-        (Tensor::of_slice(&[1.0, 1.0]), Tensor::of_slice(&[2.0, 2.0])),
-        (
-            Tensor::try_from(array![[1.0], [1.0]]).unwrap(),
-            Tensor::try_from(array![[2.0], [2.0]]).unwrap(),
-        ),
-        (
-            Tensor::try_from(array![[1.0, 0.5], [1.0, 2.0]]).unwrap(),
-            Tensor::try_from(array![[2.0, 1.0], [2.0, 1.0]]).unwrap(),
-        ),
-    ];
+        let args: Vec<(Tensor, Tensor)> = vec![
+            (1.0.into(), 2.0.into()),
+            (2.0.into(), 4.0.into()),
+            (
+                Tensor::from_slice(&[1.0, 1.0]),
+                Tensor::from_slice(&[2.0, 2.0]),
+            ),
+            (
+                Tensor::try_from(array![[1.0], [1.0]]).unwrap(),
+                Tensor::try_from(array![[2.0], [2.0]]).unwrap(),
+            ),
+            (
+                Tensor::try_from(array![[1.0, 0.5], [1.0, 2.0]]).unwrap(),
+                Tensor::try_from(array![[2.0, 1.0], [2.0, 1.0]]).unwrap(),
+            ),
+        ];
 
-    let mut test_cases = TestCases::default();
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        let mut test_cases = TestCases::default();
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
 
-    for (mean, std) in args.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Normal")
-            .expect("call Normal failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &mean),
-                tensor_to_py_obj(&py_env, &std),
-            ))
-            .unwrap();
-        let dist_rs = Normal::new(mean, std);
+        for (mean, std) in args.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Normal")
+                .expect("call Normal failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &mean),
+                    tensor_to_py_obj(&py_env, &std),
+                ))
+                .unwrap();
+            let dist_rs = Normal::new(mean, std);
 
-        // The test of rsampling is not in function `run_test_cases`,
-        // because `rsample` is not a method of trait `Distribution`
-        if let Some(sample) = &test_cases.sample {
-            test_rsample_of_normal_distribution(&py_env, &dist_rs, dist_py, sample);
+            // The test of rsampling is not in function `run_test_cases`,
+            // because `rsample` is not a method of trait `Distribution`
+            if let Some(sample) = &test_cases.sample {
+                test_rsample_of_normal_distribution(&py_env, &dist_rs, dist_py, sample);
+            }
+
+            //genral test
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
         }
 
-        //genral test
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        let p_q_mean_std: Vec<((Tensor, Tensor), (Tensor, Tensor))> =
+            vec![((1.0.into(), 2.0.into()), (2.0.into(), 3.0.into()))];
 
-    let p_q_mean_std: Vec<((Tensor, Tensor), (Tensor, Tensor))> =
-        vec![((1.0.into(), 2.0.into()), (2.0.into(), 3.0.into()))];
+        for ((p_mean, p_std), (q_mean, q_std)) in p_q_mean_std {
+            let dist_p_py = py_env
+                .distributions
+                .getattr("Normal")
+                .expect("call Normal failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &p_mean),
+                    tensor_to_py_obj(&py_env, &p_std),
+                ))
+                .unwrap();
+            let dist_p_rs = Normal::new(p_mean, p_std);
 
-    for ((p_mean, p_std), (q_mean, q_std)) in p_q_mean_std {
-        let dist_p_py = py_env
-            .distributions
-            .getattr("Normal")
-            .expect("call Normal failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &p_mean),
-                tensor_to_py_obj(&py_env, &p_std),
-            ))
-            .unwrap();
-        let dist_p_rs = Normal::new(p_mean, p_std);
+            let dist_q_py = py_env
+                .distributions
+                .getattr("Normal")
+                .expect("call Normal failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &q_mean),
+                    tensor_to_py_obj(&py_env, &q_std),
+                ))
+                .unwrap();
+            let dist_q_rs = Normal::new(q_mean, q_std);
 
-        let dist_q_py = py_env
-            .distributions
-            .getattr("Normal")
-            .expect("call Normal failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &q_mean),
-                tensor_to_py_obj(&py_env, &q_std),
-            ))
-            .unwrap();
-        let dist_q_rs = Normal::new(q_mean, q_std);
-
-        test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
-    }
+            test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
+        }
+    })
 }
 
 #[test]
 #[serial]
 fn uniform() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    let args: Vec<(Tensor, Tensor)> = vec![
-        (1.0.into(), 2.0.into()),
-        ((-1.0).into(), 4.0.into()),
-        (Tensor::of_slice(&[1.0, 1.0]), Tensor::of_slice(&[2.0, 2.0])),
-    ];
+        let args: Vec<(Tensor, Tensor)> = vec![
+            (1.0.into(), 2.0.into()),
+            ((-1.0).into(), 4.0.into()),
+            (
+                Tensor::from_slice(&[1.0, 1.0]),
+                Tensor::from_slice(&[2.0, 2.0]),
+            ),
+        ];
 
-    let mut test_cases = TestCases::default();
+        let mut test_cases = TestCases::default();
 
-    // NOTE: because all samples of `log_prob` would be testes for each of `args`,
-    // so within distribution uniform, the VALID parameter parsed to `log_prob` should be
-    // in the range of intersection of all `args`
-    test_cases.log_prob = Some(vec![
-        1.2.into(),
-        2.0.into(),
-        Tensor::of_slice(&[1.2, 1.4]),
-        Tensor::of_slice(&[2.0, 1.5]),
-    ]);
-    test_cases.sample = Some(vec![vec![1], vec![2], vec![1, 4], vec![2, 3]]);
+        // NOTE: because all samples of `log_prob` would be testes for each of `args`,
+        // so within distribution uniform, the VALID parameter parsed to `log_prob` should be
+        // in the range of intersection of all `args`
+        test_cases.log_prob = Some(vec![
+            1.2.into(),
+            2.0.into(),
+            Tensor::from_slice(&[1.2, 1.4]),
+            Tensor::from_slice(&[2.0, 1.5]),
+        ]);
+        test_cases.sample = Some(vec![vec![1], vec![2], vec![1, 4], vec![2, 3]]);
 
-    for (low, high) in args.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Uniform")
-            .expect("call Uniform failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &low),
-                tensor_to_py_obj(&py_env, &high),
-            ))
-            .unwrap();
-        let dist_rs = Uniform::new(low, high);
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        for (low, high) in args.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Uniform")
+                .expect("call Uniform failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &low),
+                    tensor_to_py_obj(&py_env, &high),
+                ))
+                .unwrap();
+            let dist_rs = Uniform::new(low, high);
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
 
-    let p_q_mean_std: Vec<((Tensor, Tensor), (Tensor, Tensor))> = vec![
-        ((0.0.into(), 3.0.into()), (1.0.into(), 3.0.into())),
-        ((1.0.into(), 2.0.into()), (0.0.into(), 3.0.into())),
-    ];
+        let p_q_mean_std: Vec<((Tensor, Tensor), (Tensor, Tensor))> = vec![
+            ((0.0.into(), 3.0.into()), (1.0.into(), 3.0.into())),
+            ((1.0.into(), 2.0.into()), (0.0.into(), 3.0.into())),
+        ];
 
-    for ((p_low, p_high), (q_low, q_high)) in p_q_mean_std {
-        let dist_p_py = py_env
-            .distributions
-            .getattr("Uniform")
-            .expect("call Uniform failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &p_low),
-                tensor_to_py_obj(&py_env, &p_high),
-            ))
-            .unwrap();
-        let dist_p_rs = Uniform::new(p_low, p_high);
+        for ((p_low, p_high), (q_low, q_high)) in p_q_mean_std {
+            let dist_p_py = py_env
+                .distributions
+                .getattr("Uniform")
+                .expect("call Uniform failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &p_low),
+                    tensor_to_py_obj(&py_env, &p_high),
+                ))
+                .unwrap();
+            let dist_p_rs = Uniform::new(p_low, p_high);
 
-        let dist_q_py = py_env
-            .distributions
-            .getattr("Uniform")
-            .expect("call Uniform failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &q_low),
-                tensor_to_py_obj(&py_env, &q_high),
-            ))
-            .unwrap();
-        let dist_q_rs = Uniform::new(q_low, q_high);
+            let dist_q_py = py_env
+                .distributions
+                .getattr("Uniform")
+                .expect("call Uniform failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &q_low),
+                    tensor_to_py_obj(&py_env, &q_high),
+                ))
+                .unwrap();
+            let dist_q_rs = Uniform::new(q_low, q_high);
 
-        test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
-    }
+            test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
+        }
+    });
 }
 
 #[test]
 #[serial]
 fn bernoulli() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    let probs: Vec<Tensor> = vec![0.1337.into(), 0.6667.into()];
+        let probs: Vec<Tensor> = vec![0.1337.into(), 0.6667.into()];
 
-    let mut test_cases = TestCases::default();
-    test_cases.icdf = None;
-    test_cases.cdf = None;
-    // NOTE: for distribution bernoulli, only 1 or 0 is valid for method `log_prob`
-    test_cases.log_prob = Some(vec![
-        0.0.into(),
-        1.0.into(),
-        Tensor::of_slice(&[1.0, 0.0]),
-        Tensor::of_slice(&[0.0, 1.0]),
-    ]);
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        let mut test_cases = TestCases::default();
+        test_cases.icdf = None;
+        test_cases.cdf = None;
+        // NOTE: for distribution bernoulli, only 1 or 0 is valid for method `log_prob`
+        test_cases.log_prob = Some(vec![
+            0.0.into(),
+            1.0.into(),
+            Tensor::from_slice(&[1.0, 0.0]),
+            Tensor::from_slice(&[0.0, 1.0]),
+        ]);
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
 
-    for probs in probs.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Bernoulli")
-            .expect("call Bernoulli failed")
-            .call1((tensor_to_py_obj(&py_env, &probs),))
-            .unwrap();
-        let dist_rs = Bernoulli::from_probs(probs);
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        for probs in probs.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Bernoulli")
+                .expect("call Bernoulli failed")
+                .call1((tensor_to_py_obj(&py_env, &probs),))
+                .unwrap();
+            let dist_rs = Bernoulli::from_probs(probs);
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
 
-    let logits: Vec<Tensor> = vec![0.1337.into(), 0.6667.into()];
+        let logits: Vec<Tensor> = vec![0.1337.into(), 0.6667.into()];
 
-    let mut test_cases = TestCases::default();
-    test_cases.icdf = None;
-    test_cases.cdf = None;
-    // NOTE: for distribution bernoulli, only 1 or 0 is valid for method `log_prob`
-    test_cases.log_prob = Some(vec![
-        0.0.into(),
-        1.0.into(),
-        Tensor::of_slice(&[1.0, 0.0]),
-        Tensor::of_slice(&[0.0, 1.0]),
-    ]);
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        let mut test_cases = TestCases::default();
+        test_cases.icdf = None;
+        test_cases.cdf = None;
+        // NOTE: for distribution bernoulli, only 1 or 0 is valid for method `log_prob`
+        test_cases.log_prob = Some(vec![
+            0.0.into(),
+            1.0.into(),
+            Tensor::from_slice(&[1.0, 0.0]),
+            Tensor::from_slice(&[0.0, 1.0]),
+        ]);
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
 
-    for logits in logits.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Bernoulli")
-            .expect("call Bernoulli failed")
-            .call1((
-                pyo3::Python::None(py_env.py),
-                tensor_to_py_obj(&py_env, &logits).to_object(py_env.py),
-            ))
-            .unwrap();
-        let dist_rs = Bernoulli::from_logits(logits);
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        for logits in logits.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Bernoulli")
+                .expect("call Bernoulli failed")
+                .call1((
+                    pyo3::Python::None(py_env.py),
+                    tensor_to_py_obj(&py_env, &logits).to_object(py_env.py),
+                ))
+                .unwrap();
+            let dist_rs = Bernoulli::from_logits(logits);
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
 
-    let p_q_probs: Vec<(Tensor, Tensor)> =
-        vec![(0.3.into(), 0.65.into()), (0.11237.into(), 0.898.into())];
+        let p_q_probs: Vec<(Tensor, Tensor)> =
+            vec![(0.3.into(), 0.65.into()), (0.11237.into(), 0.898.into())];
 
-    for (p_probs, q_probs) in p_q_probs {
-        let dist_p_py = py_env
-            .distributions
-            .getattr("Bernoulli")
-            .expect("call Bernoulli failed")
-            .call1((tensor_to_py_obj(&py_env, &p_probs),))
-            .unwrap();
-        let dist_p_rs = Bernoulli::from_probs(p_probs);
+        for (p_probs, q_probs) in p_q_probs {
+            let dist_p_py = py_env
+                .distributions
+                .getattr("Bernoulli")
+                .expect("call Bernoulli failed")
+                .call1((tensor_to_py_obj(&py_env, &p_probs),))
+                .unwrap();
+            let dist_p_rs = Bernoulli::from_probs(p_probs);
 
-        let dist_q_py = py_env
-            .distributions
-            .getattr("Bernoulli")
-            .expect("call Bernoulli failed")
-            .call1((tensor_to_py_obj(&py_env, &q_probs),))
-            .unwrap();
-        let dist_q_rs = Bernoulli::from_probs(q_probs);
+            let dist_q_py = py_env
+                .distributions
+                .getattr("Bernoulli")
+                .expect("call Bernoulli failed")
+                .call1((tensor_to_py_obj(&py_env, &q_probs),))
+                .unwrap();
+            let dist_q_rs = Bernoulli::from_probs(q_probs);
 
-        test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
-    }
+            test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
+        }
+    });
 }
 
 #[test]
 #[serial]
 fn poisson() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    let rates: Vec<Tensor> = vec![
-        0.1337.into(),
-        0.6667.into(),
-        Tensor::of_slice(&[0.156, 0.33]),
-    ];
+        let rates: Vec<Tensor> = vec![
+            0.1337.into(),
+            0.6667.into(),
+            Tensor::from_slice(&[0.156, 0.33]),
+        ];
 
-    let mut test_cases = TestCases::default();
-    test_cases.cdf = None;
-    test_cases.icdf = None;
-    test_cases.entropy = false;
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        let mut test_cases = TestCases::default();
+        test_cases.cdf = None;
+        test_cases.icdf = None;
+        test_cases.entropy = false;
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
 
-    for rate in rates.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Poisson")
-            .expect("call Poisson failed")
-            .call1((tensor_to_py_obj(&py_env, &rate),))
-            .unwrap();
-        let dist_rs = Poisson::new(rate);
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        for rate in rates.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Poisson")
+                .expect("call Poisson failed")
+                .call1((tensor_to_py_obj(&py_env, &rate),))
+                .unwrap();
+            let dist_rs = Poisson::new(rate);
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
 
-    let p_q_rate: Vec<(Tensor, Tensor)> = vec![(1.0.into(), 2.0.into()), (3.0.into(), 4.0.into())];
+        let p_q_rate: Vec<(Tensor, Tensor)> =
+            vec![(1.0.into(), 2.0.into()), (3.0.into(), 4.0.into())];
 
-    for (p_rate, q_rate) in p_q_rate {
-        let dist_p_py = py_env
-            .distributions
-            .getattr("Poisson")
-            .expect("call Poisson failed")
-            .call1((tensor_to_py_obj(&py_env, &p_rate),))
-            .unwrap();
-        let dist_p_rs = Poisson::new(p_rate);
+        for (p_rate, q_rate) in p_q_rate {
+            let dist_p_py = py_env
+                .distributions
+                .getattr("Poisson")
+                .expect("call Poisson failed")
+                .call1((tensor_to_py_obj(&py_env, &p_rate),))
+                .unwrap();
+            let dist_p_rs = Poisson::new(p_rate);
 
-        let dist_q_py = py_env
-            .distributions
-            .getattr("Poisson")
-            .expect("call Poisson failed")
-            .call1((tensor_to_py_obj(&py_env, &q_rate),))
-            .unwrap();
-        let dist_q_rs = Poisson::new(q_rate);
+            let dist_q_py = py_env
+                .distributions
+                .getattr("Poisson")
+                .expect("call Poisson failed")
+                .call1((tensor_to_py_obj(&py_env, &q_rate),))
+                .unwrap();
+            let dist_q_rs = Poisson::new(q_rate);
 
-        test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
-    }
+            test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
+        }
+    })
 }
 
 #[test]
 #[serial]
 fn exponential() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    let rates: Vec<Tensor> = vec![
-        0.1337.into(),
-        0.6667.into(),
-        Tensor::of_slice(&[0.156, 0.33]),
-    ];
+        let rates: Vec<Tensor> = vec![
+            0.1337.into(),
+            0.6667.into(),
+            Tensor::from_slice(&[0.156, 0.33]),
+        ];
 
-    let mut test_cases = TestCases::default();
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        let mut test_cases = TestCases::default();
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
 
-    for rate in rates.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Exponential")
-            .expect("call Exponential failed")
-            .call1((tensor_to_py_obj(&py_env, &rate),))
-            .unwrap();
-        let dist_rs = Exponential::new(rate);
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        for rate in rates.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Exponential")
+                .expect("call Exponential failed")
+                .call1((tensor_to_py_obj(&py_env, &rate),))
+                .unwrap();
+            let dist_rs = Exponential::new(rate);
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
 
-    let p_q_rate: Vec<(Tensor, Tensor)> = vec![(0.3.into(), 0.7.into()), (0.6.into(), 0.5.into())];
+        let p_q_rate: Vec<(Tensor, Tensor)> =
+            vec![(0.3.into(), 0.7.into()), (0.6.into(), 0.5.into())];
 
-    for (p_rate, q_rate) in p_q_rate {
-        let dist_p_py = py_env
-            .distributions
-            .getattr("Exponential")
-            .expect("call Exponential failed")
-            .call1((tensor_to_py_obj(&py_env, &p_rate),))
-            .unwrap();
-        let dist_p_rs = Exponential::new(p_rate);
+        for (p_rate, q_rate) in p_q_rate {
+            let dist_p_py = py_env
+                .distributions
+                .getattr("Exponential")
+                .expect("call Exponential failed")
+                .call1((tensor_to_py_obj(&py_env, &p_rate),))
+                .unwrap();
+            let dist_p_rs = Exponential::new(p_rate);
 
-        let dist_q_py = py_env
-            .distributions
-            .getattr("Exponential")
-            .expect("call Exponential failed")
-            .call1((tensor_to_py_obj(&py_env, &q_rate),))
-            .unwrap();
-        let dist_q_rs = Exponential::new(q_rate);
+            let dist_q_py = py_env
+                .distributions
+                .getattr("Exponential")
+                .expect("call Exponential failed")
+                .call1((tensor_to_py_obj(&py_env, &q_rate),))
+                .unwrap();
+            let dist_q_rs = Exponential::new(q_rate);
 
-        test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
-    }
+            test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
+        }
+    })
 }
 
 #[test]
 #[serial]
 fn cauchy() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    let args: Vec<(Tensor, Tensor)> = vec![
-        (1.0.into(), 2.0.into()),
-        (2.0.into(), 4.0.into()),
-        (Tensor::of_slice(&[1.0, 1.0]), Tensor::of_slice(&[2.0, 2.0])),
-    ];
+        let args: Vec<(Tensor, Tensor)> = vec![
+            (1.0.into(), 2.0.into()),
+            (2.0.into(), 4.0.into()),
+            (
+                Tensor::from_slice(&[1.0, 1.0]),
+                Tensor::from_slice(&[2.0, 2.0]),
+            ),
+        ];
 
-    let mut test_cases = TestCases::default();
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        let mut test_cases = TestCases::default();
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
 
-    for (median, scale) in args.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Cauchy")
-            .expect("call Cauchy failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &median),
-                tensor_to_py_obj(&py_env, &scale),
-            ))
-            .unwrap();
-        let dist_rs = Cauchy::new(median, scale);
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        for (median, scale) in args.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Cauchy")
+                .expect("call Cauchy failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &median),
+                    tensor_to_py_obj(&py_env, &scale),
+                ))
+                .unwrap();
+            let dist_rs = Cauchy::new(median, scale);
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
+    })
 }
 
 #[test]
 #[serial]
 fn gamma() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    let args: Vec<(Tensor, Tensor)> = vec![
-        (1.0.into(), 2.0.into()),
-        (2.0.into(), 4.0.into()),
-        (Tensor::of_slice(&[1.0, 1.0]), Tensor::of_slice(&[2.0, 2.0])),
-    ];
+        let args: Vec<(Tensor, Tensor)> = vec![
+            (1.0.into(), 2.0.into()),
+            (2.0.into(), 4.0.into()),
+            (
+                Tensor::from_slice(&[1.0, 1.0]),
+                Tensor::from_slice(&[2.0, 2.0]),
+            ),
+        ];
 
-    let mut test_cases = TestCases::default();
-    test_cases.cdf = None;
-    test_cases.icdf = None;
+        let mut test_cases = TestCases::default();
+        test_cases.cdf = None;
+        test_cases.icdf = None;
 
-    for (concentration, rate) in args.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Gamma")
-            .expect("call Gamma failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &concentration),
-                tensor_to_py_obj(&py_env, &rate),
-            ))
-            .unwrap();
-        let dist_rs = Gamma::new(concentration, rate);
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        for (concentration, rate) in args.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Gamma")
+                .expect("call Gamma failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &concentration),
+                    tensor_to_py_obj(&py_env, &rate),
+                ))
+                .unwrap();
+            let dist_rs = Gamma::new(concentration, rate);
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
 
-    let p_q_concentration_rate: Vec<((Tensor, Tensor), (Tensor, Tensor))> =
-        vec![((0.3.into(), 0.7.into()), (0.6.into(), 0.5.into()))];
+        let p_q_concentration_rate: Vec<((Tensor, Tensor), (Tensor, Tensor))> =
+            vec![((0.3.into(), 0.7.into()), (0.6.into(), 0.5.into()))];
 
-    for ((p_concentration, p_rate), (q_concentration, q_rate)) in p_q_concentration_rate {
-        let dist_p_py = py_env
-            .distributions
-            .getattr("Gamma")
-            .expect("call Gamma failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &p_concentration),
-                tensor_to_py_obj(&py_env, &p_rate),
-            ))
-            .unwrap();
-        let dist_p_rs = Gamma::new(p_concentration, p_rate);
+        for ((p_concentration, p_rate), (q_concentration, q_rate)) in p_q_concentration_rate {
+            let dist_p_py = py_env
+                .distributions
+                .getattr("Gamma")
+                .expect("call Gamma failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &p_concentration),
+                    tensor_to_py_obj(&py_env, &p_rate),
+                ))
+                .unwrap();
+            let dist_p_rs = Gamma::new(p_concentration, p_rate);
 
-        let dist_q_py = py_env
-            .distributions
-            .getattr("Gamma")
-            .expect("call Gamma failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &q_concentration),
-                tensor_to_py_obj(&py_env, &q_rate),
-            ))
-            .unwrap();
-        let dist_q_rs = Gamma::new(q_concentration, q_rate);
+            let dist_q_py = py_env
+                .distributions
+                .getattr("Gamma")
+                .expect("call Gamma failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &q_concentration),
+                    tensor_to_py_obj(&py_env, &q_rate),
+                ))
+                .unwrap();
+            let dist_q_rs = Gamma::new(q_concentration, q_rate);
 
-        test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
-    }
+            test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
+        }
+    })
 }
 
 #[test]
 #[serial]
 fn geometric() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    let probs: Vec<Tensor> = vec![0.1337.into(), 0.6667.into(), 1.0.into()];
+        let probs: Vec<Tensor> = vec![0.1337.into(), 0.6667.into(), 1.0.into()];
 
-    let mut test_cases = TestCases::default();
-    test_cases.icdf = None;
-    test_cases.cdf = None;
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        let mut test_cases = TestCases::default();
+        test_cases.icdf = None;
+        test_cases.cdf = None;
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
 
-    for probs in probs.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Geometric")
-            .expect("call Geometric failed")
-            .call1((tensor_to_py_obj(&py_env, &probs),))
-            .unwrap();
-        let dist_rs = Geometric::from_probs(probs);
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        for probs in probs.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Geometric")
+                .expect("call Geometric failed")
+                .call1((tensor_to_py_obj(&py_env, &probs),))
+                .unwrap();
+            let dist_rs = Geometric::from_probs(probs);
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
 
-    let logits: Vec<Tensor> = vec![0.1337.into(), 0.6667.into(), 1.0.into()];
+        let logits: Vec<Tensor> = vec![0.1337.into(), 0.6667.into(), 1.0.into()];
 
-    let mut test_cases = TestCases::default();
-    test_cases.icdf = None;
-    test_cases.cdf = None;
+        let mut test_cases = TestCases::default();
+        test_cases.icdf = None;
+        test_cases.cdf = None;
 
-    for logits in logits.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Geometric")
-            .expect("call Geometric failed")
-            .call1((
-                pyo3::Python::None(py_env.py),
-                tensor_to_py_obj(&py_env, &logits).to_object(py_env.py),
-            ))
-            .unwrap();
-        let dist_rs = Geometric::from_logits(logits);
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+        for logits in logits.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Geometric")
+                .expect("call Geometric failed")
+                .call1((
+                    pyo3::Python::None(py_env.py),
+                    tensor_to_py_obj(&py_env, &logits).to_object(py_env.py),
+                ))
+                .unwrap();
+            let dist_rs = Geometric::from_logits(logits);
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
 
-    let p_q_probs: Vec<(Tensor, Tensor)> = vec![(0.3.into(), 0.7.into()), (0.6.into(), 0.5.into())];
+        let p_q_probs: Vec<(Tensor, Tensor)> =
+            vec![(0.3.into(), 0.7.into()), (0.6.into(), 0.5.into())];
 
-    for (p_probs, q_probs) in p_q_probs {
-        let dist_p_py = py_env
-            .distributions
-            .getattr("Geometric")
-            .expect("call Geometric failed")
-            .call1((tensor_to_py_obj(&py_env, &p_probs),))
-            .unwrap();
-        let dist_p_rs = Geometric::from_probs(p_probs);
+        for (p_probs, q_probs) in p_q_probs {
+            let dist_p_py = py_env
+                .distributions
+                .getattr("Geometric")
+                .expect("call Geometric failed")
+                .call1((tensor_to_py_obj(&py_env, &p_probs),))
+                .unwrap();
+            let dist_p_rs = Geometric::from_probs(p_probs);
 
-        let dist_q_py = py_env
-            .distributions
-            .getattr("Geometric")
-            .expect("call Geometric failed")
-            .call1((tensor_to_py_obj(&py_env, &q_probs),))
-            .unwrap();
-        let dist_q_rs = Geometric::from_probs(q_probs);
+            let dist_q_py = py_env
+                .distributions
+                .getattr("Geometric")
+                .expect("call Geometric failed")
+                .call1((tensor_to_py_obj(&py_env, &q_probs),))
+                .unwrap();
+            let dist_q_rs = Geometric::from_probs(q_probs);
 
-        test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
-    }
+            test_kl_divergence(&py_env, &dist_p_rs, &dist_q_rs, dist_p_py, dist_q_py);
+        }
+    })
 }
 
 #[test]
 #[serial]
 fn multivariate_normal() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    // 1.init/test with mean and covariance
-    // NOTE: as pytorch taks float64 as default number type,
-    // Here we use tch::Kind::Double to make consistent
-    let mean_and_covs: Vec<(Tensor, Tensor)> = vec![
-        (
-            Tensor::ones(&[1], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::eye(1, (tch::Kind::Double, tch::Device::Cpu)),
-        ),
-        (
-            Tensor::of_slice(&[1f64, 2.0, 3.0]),
-            Tensor::try_from(array![[3f64, 0.0, 0.0], [0.0, 7.0, 0.0], [0.0, 0.0, 10.0]]).unwrap(),
-        ),
-        (
-            Tensor::ones(&[1, 4], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::eye(4, (tch::Kind::Double, tch::Device::Cpu)),
-        ),
-        (
-            Tensor::ones(&[4, 2], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::eye(2, (tch::Kind::Double, tch::Device::Cpu)),
-        ),
-        (
-            Tensor::ones(&[3], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::eye(3, (tch::Kind::Double, tch::Device::Cpu)),
-        ),
-    ];
+        // 1.init/test with mean and covariance
+        // NOTE: as pytorch taks float64 as default number type,
+        // Here we use tch::Kind::Double to make consistent
+        let mean_and_covs: Vec<(Tensor, Tensor)> = vec![
+            (
+                Tensor::ones(&[1], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::eye(1, (tch::Kind::Double, tch::Device::Cpu)),
+            ),
+            (
+                Tensor::from_slice(&[1f64, 2.0, 3.0]),
+                Tensor::try_from(array![[3f64, 0.0, 0.0], [0.0, 7.0, 0.0], [0.0, 0.0, 10.0]])
+                    .unwrap(),
+            ),
+            (
+                Tensor::ones(&[1, 4], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::eye(4, (tch::Kind::Double, tch::Device::Cpu)),
+            ),
+            (
+                Tensor::ones(&[4, 2], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::eye(2, (tch::Kind::Double, tch::Device::Cpu)),
+            ),
+            (
+                Tensor::ones(&[3], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::eye(3, (tch::Kind::Double, tch::Device::Cpu)),
+            ),
+        ];
 
-    let mut test_cases = TestCases::default();
-    test_cases.icdf = None;
-    test_cases.cdf = None;
-    test_cases.entropy = false;
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
-    test_cases.log_prob = None;
+        let mut test_cases = TestCases::default();
+        test_cases.icdf = None;
+        test_cases.cdf = None;
+        test_cases.entropy = false;
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        test_cases.log_prob = None;
 
-    for (mean, cov) in mean_and_covs.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("MultivariateNormal")
-            .expect("call MultivariateNormal failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &mean),
-                tensor_to_py_obj(&py_env, &cov),
-            ))
-            .unwrap();
-        let dist_rs = MultivariateNormal::from_cov(mean, cov);
+        for (mean, cov) in mean_and_covs.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("MultivariateNormal")
+                .expect("call MultivariateNormal failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &mean),
+                    tensor_to_py_obj(&py_env, &cov),
+                ))
+                .unwrap();
+            let dist_rs = MultivariateNormal::from_cov(mean, cov);
 
-        // The test of rsampling is not in function `run_test_cases`,
-        // because `rsample` is not a method of trait `Distribution`
-        if let Some(sample) = &test_cases.sample {
-            test_rsample_of_multi_var_normal_distribution(&py_env, &dist_rs, dist_py, sample);
+            // The test of rsampling is not in function `run_test_cases`,
+            // because `rsample` is not a method of trait `Distribution`
+            if let Some(sample) = &test_cases.sample {
+                test_rsample_of_multi_var_normal_distribution(&py_env, &dist_rs, dist_py, sample);
+            }
+
+            // run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
         }
 
-        // run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
-
-    // 2.init/test with mean and precisions
-    // NOTE: as pytorch taks float64 as default number type,
-    // Here we use tch::Kind::Double to make consistent
-    let mean_and_precisions: Vec<(Tensor, Tensor)> = vec![
-        (
-            Tensor::ones(&[1, 1], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::of_slice(&[0.6f64]).reshape(&[1, 1]), //precision has to be float32, not int, not double
-        ),
-        (
-            Tensor::ones(&[1, 2], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::of_slice(&[0.6f64, 0.4, 0.5, 0.5]).reshape(&[2, 2]),
-        ),
-    ];
-    let mut test_cases = TestCases::default();
-    test_cases.icdf = None;
-    test_cases.cdf = None;
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
-    for (mean, precision) in mean_and_precisions.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("MultivariateNormal")
-            .expect("call MultivariateNormal failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &mean),
-                pyo3::Python::None(py_env.py),
-                tensor_to_py_obj(&py_env, &precision),
-            ))
-            .unwrap();
-        let dist_rs = MultivariateNormal::from_precision(mean, precision);
-        // The test of rsampling is not in function `run_test_cases`,
-        // because `rsample` is not a method of trait `Distribution`
-        if let Some(sample) = &test_cases.sample {
-            test_rsample_of_multi_var_normal_distribution(&py_env, &dist_rs, dist_py, sample);
+        // 2.init/test with mean and precisions
+        // NOTE: as pytorch taks float64 as default number type,
+        // Here we use tch::Kind::Double to make consistent
+        let mean_and_precisions: Vec<(Tensor, Tensor)> = vec![
+            (
+                Tensor::ones(&[1, 1], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::from_slice(&[0.6f64]).reshape(&[1, 1]), //precision has to be float32, not int, not double
+            ),
+            (
+                Tensor::ones(&[1, 2], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::from_slice(&[0.6f64, 0.4, 0.5, 0.5]).reshape(&[2, 2]),
+            ),
+        ];
+        let mut test_cases = TestCases::default();
+        test_cases.icdf = None;
+        test_cases.cdf = None;
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        for (mean, precision) in mean_and_precisions.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("MultivariateNormal")
+                .expect("call MultivariateNormal failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &mean),
+                    pyo3::Python::None(py_env.py),
+                    tensor_to_py_obj(&py_env, &precision),
+                ))
+                .unwrap();
+            let dist_rs = MultivariateNormal::from_precision(mean, precision);
+            // The test of rsampling is not in function `run_test_cases`,
+            // because `rsample` is not a method of trait `Distribution`
+            if let Some(sample) = &test_cases.sample {
+                test_rsample_of_multi_var_normal_distribution(&py_env, &dist_rs, dist_py, sample);
+            }
+            // run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
         }
-        // run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
 
-    // 3.init/test with mean and scale_trils
-    // NOTE: as pytorch taks float64 as default number type,
-    // Here we use tch::Kind::Double to make consistent
-    let mean_and_scale_trils: Vec<(Tensor, Tensor)> = vec![
-        (
-            Tensor::ones(&[1], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::eye(1, (tch::Kind::Double, tch::Device::Cpu)),
-        ),
-        (
-            Tensor::of_slice(&[1f64, 2.0, 3.0]),
-            Tensor::try_from(array![[3f64, 0.0, 0.0], [0.0, 7.0, 0.0], [0.0, 0.0, 10.0]]).unwrap(),
-        ),
-        (
-            Tensor::ones(&[1, 4], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::eye(4, (tch::Kind::Double, tch::Device::Cpu)),
-        ),
-        (
-            Tensor::ones(&[4, 2], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::eye(2, (tch::Kind::Double, tch::Device::Cpu)),
-        ),
-        (
-            Tensor::ones(&[3], (tch::Kind::Double, tch::Device::Cpu)),
-            Tensor::eye(3, (tch::Kind::Double, tch::Device::Cpu)),
-        ),
-    ];
+        // 3.init/test with mean and scale_trils
+        // NOTE: as pytorch taks float64 as default number type,
+        // Here we use tch::Kind::Double to make consistent
+        let mean_and_scale_trils: Vec<(Tensor, Tensor)> = vec![
+            (
+                Tensor::ones(&[1], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::eye(1, (tch::Kind::Double, tch::Device::Cpu)),
+            ),
+            (
+                Tensor::from_slice(&[1f64, 2.0, 3.0]),
+                Tensor::try_from(array![[3f64, 0.0, 0.0], [0.0, 7.0, 0.0], [0.0, 0.0, 10.0]])
+                    .unwrap(),
+            ),
+            (
+                Tensor::ones(&[1, 4], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::eye(4, (tch::Kind::Double, tch::Device::Cpu)),
+            ),
+            (
+                Tensor::ones(&[4, 2], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::eye(2, (tch::Kind::Double, tch::Device::Cpu)),
+            ),
+            (
+                Tensor::ones(&[3], (tch::Kind::Double, tch::Device::Cpu)),
+                Tensor::eye(3, (tch::Kind::Double, tch::Device::Cpu)),
+            ),
+        ];
 
-    let mut test_cases = TestCases::default();
-    test_cases.icdf = None;
-    test_cases.cdf = None;
-    test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
+        let mut test_cases = TestCases::default();
+        test_cases.icdf = None;
+        test_cases.cdf = None;
+        test_cases.sample = Some(vec![vec![1], vec![1, 2]]);
 
-    for (mean, scale_tril) in mean_and_scale_trils.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("MultivariateNormal")
-            .expect("call MultivariateNormal failed")
-            .call1((
-                tensor_to_py_obj(&py_env, &mean),
-                pyo3::Python::None(py_env.py),
-                pyo3::Python::None(py_env.py),
-                tensor_to_py_obj(&py_env, &scale_tril),
-            ))
-            .unwrap();
-        let dist_rs = MultivariateNormal::from_scale_tril(mean, scale_tril);
-        if let Some(sample) = &test_cases.sample {
-            test_rsample_of_multi_var_normal_distribution(&py_env, &dist_rs, dist_py, sample);
+        for (mean, scale_tril) in mean_and_scale_trils.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("MultivariateNormal")
+                .expect("call MultivariateNormal failed")
+                .call1((
+                    tensor_to_py_obj(&py_env, &mean),
+                    pyo3::Python::None(py_env.py),
+                    pyo3::Python::None(py_env.py),
+                    tensor_to_py_obj(&py_env, &scale_tril),
+                ))
+                .unwrap();
+            let dist_rs = MultivariateNormal::from_scale_tril(mean, scale_tril);
+            if let Some(sample) = &test_cases.sample {
+                test_rsample_of_multi_var_normal_distribution(&py_env, &dist_rs, dist_py, sample);
+            }
+            // run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
         }
-        // run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+    })
 }
 
 #[test]
 #[serial]
 fn categorical() {
-    let gil = Python::acquire_gil();
-    let py_env = PyEnv::new(&gil);
+    Python::with_gil(|py| {
+        let py_env = PyEnv::new(py);
 
-    // 1.init/test with probabilities
-    let prob_args_vec: Vec<Tensor> = vec![
-        Tensor::of_slice(&[0.25, 0.25, 0.1, 0.4]),
-        Tensor::try_from(array![[0.1, 0.1, 0.8], [0.1, 0.7, 0.2], [0.3, 0.4, 0.3]])
+        // 1.init/test with probabilities
+        let prob_args_vec: Vec<Tensor> = vec![
+            Tensor::from_slice(&[0.25, 0.25, 0.1, 0.4]),
+            Tensor::try_from(array![[0.1, 0.1, 0.8], [0.1, 0.7, 0.2], [0.3, 0.4, 0.3]])
+                .expect("initial from array failed"),
+            Tensor::try_from(array![
+                [[0.4, 0.4, 0.2], [0.7, 0.2, 0.1], [0.7, 0.2, 0.1]],
+                [[0.3, 0.6, 0.1], [0.4, 0.1, 0.5], [0.7, 0.2, 0.1]]
+            ])
             .expect("initial from array failed"),
-        Tensor::try_from(array![
-            [[0.4, 0.4, 0.2], [0.7, 0.2, 0.1], [0.7, 0.2, 0.1]],
-            [[0.3, 0.6, 0.1], [0.4, 0.1, 0.5], [0.7, 0.2, 0.1]]
-        ])
-        .expect("initial from array failed"),
-    ];
+        ];
 
-    let mut test_cases = TestCases::default();
-    test_cases.icdf = None;
-    test_cases.cdf = None;
-    test_cases.log_prob = Some(vec![
-        1.0.into(),
-        2.0.into(),
-        Tensor::try_from(array![[1.0], [1.0]]).unwrap(),
-        Tensor::try_from(array![[1, 0, 2], [0, 1, 2]]).unwrap(),
-        // Tensor::of_slice(&[2.0, 2.0]),//invalid paramters
-    ]);
-    test_cases.sample = Some(vec![vec![1], vec![3]]);
-    for probs in prob_args_vec.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Categorical")
-            .expect("call Categorical with probs failed")
-            .call1((tensor_to_py_obj(&py_env, &probs),))
-            .unwrap();
-        let dist_rs = Categorical::from_probs(probs);
+        let mut test_cases = TestCases::default();
+        test_cases.icdf = None;
+        test_cases.cdf = None;
+        test_cases.log_prob = Some(vec![
+            1.0.into(),
+            2.0.into(),
+            Tensor::try_from(array![[1.0], [1.0]]).unwrap(),
+            Tensor::try_from(array![[1, 0, 2], [0, 1, 2]]).unwrap(),
+            // Tensor::of_slice(&[2.0, 2.0]),//invalid paramters
+        ]);
+        test_cases.sample = Some(vec![vec![1], vec![3]]);
+        for probs in prob_args_vec.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Categorical")
+                .expect("call Categorical with probs failed")
+                .call1((tensor_to_py_obj(&py_env, &probs),))
+                .unwrap();
+            let dist_rs = Categorical::from_probs(probs);
 
-        // // test property mean
-        // let mean_py = dist_py.getattr("mean")
-        // .expect("call property mean failed");
-        // let mean_rs = dist_rs.mean();
-        // assert_tensor_eq(py_env.py, &mean_rs, mean_py);
+            // // test property mean
+            // let mean_py = dist_py.getattr("mean")
+            // .expect("call property mean failed");
+            // let mean_rs = dist_rs.mean();
+            // assert_tensor_eq(py_env.py, &mean_rs, mean_py);
 
-        // // test property variance
-        // let variance_py = dist_py.getattr("variance")
-        // .expect("call property variance failed");
-        // let variance_rs = dist_rs.variance();
-        // assert_tensor_eq(py_env.py, &variance_rs, variance_py);
+            // // test property variance
+            // let variance_py = dist_py.getattr("variance")
+            // .expect("call property variance failed");
+            // let variance_rs = dist_rs.variance();
+            // assert_tensor_eq(py_env.py, &variance_rs, variance_py);
 
-        // common test
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+            // common test
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
 
-    // 2.init/test with log probabilities
-    let log_args_vec: Vec<Tensor> = vec![
-        Tensor::of_slice(&[0.25, 0.25, 0.1, 0.4]),
-        Tensor::try_from(array![[0.1, 0.1, 0.8], [0.1, 0.7, 0.2], [0.3, 0.4, 0.3]])
+        // 2.init/test with log probabilities
+        let log_args_vec: Vec<Tensor> = vec![
+            Tensor::from_slice(&[0.25, 0.25, 0.1, 0.4]),
+            Tensor::try_from(array![[0.1, 0.1, 0.8], [0.1, 0.7, 0.2], [0.3, 0.4, 0.3]])
+                .expect("initial from array failed"),
+            Tensor::try_from(array![
+                [[0.4, 0.4, 0.2], [0.7, 0.2, 0.1], [0.7, 0.2, 0.1]],
+                [[0.3, 0.6, 0.1], [0.4, 0.1, 0.5], [0.7, 0.2, 0.1]]
+            ])
             .expect("initial from array failed"),
-        Tensor::try_from(array![
-            [[0.4, 0.4, 0.2], [0.7, 0.2, 0.1], [0.7, 0.2, 0.1]],
-            [[0.3, 0.6, 0.1], [0.4, 0.1, 0.5], [0.7, 0.2, 0.1]]
-        ])
-        .expect("initial from array failed"),
-    ];
+        ];
 
-    let mut test_cases = TestCases::default();
-    test_cases.icdf = None;
-    test_cases.cdf = None;
-    test_cases.log_prob = Some(vec![
-        1.0.into(),
-        2.0.into(),
-        Tensor::try_from(array![[1.0], [1.0]]).unwrap(),
-        Tensor::try_from(array![[1, 0, 2], [0, 1, 2]]).unwrap(),
-        // Tensor::of_slice(&[2.0, 2.0]),//invalid paramters
-    ]);
-    test_cases.sample = Some(vec![vec![1], vec![3]]);
-    for logits in log_args_vec.into_iter() {
-        let dist_py = py_env
-            .distributions
-            .getattr("Categorical")
-            .expect("call Categorical with logits failed")
-            .call1((
-                pyo3::Python::None(py_env.py),
-                tensor_to_py_obj(&py_env, &logits).to_object(py_env.py),
-            ))
-            .unwrap();
-        let dist_rs = Categorical::from_logits(logits);
+        let mut test_cases = TestCases::default();
+        test_cases.icdf = None;
+        test_cases.cdf = None;
+        test_cases.log_prob = Some(vec![
+            1.0.into(),
+            2.0.into(),
+            Tensor::try_from(array![[1.0], [1.0]]).unwrap(),
+            Tensor::try_from(array![[1, 0, 2], [0, 1, 2]]).unwrap(),
+            // Tensor::of_slice(&[2.0, 2.0]),//invalid paramters
+        ]);
+        test_cases.sample = Some(vec![vec![1], vec![3]]);
+        for logits in log_args_vec.into_iter() {
+            let dist_py = py_env
+                .distributions
+                .getattr("Categorical")
+                .expect("call Categorical with logits failed")
+                .call1((
+                    pyo3::Python::None(py_env.py),
+                    tensor_to_py_obj(&py_env, &logits).to_object(py_env.py),
+                ))
+                .unwrap();
+            let dist_rs = Categorical::from_logits(logits);
 
-        // // test property mean
-        // let mean_py = dist_py.getattr("mean")
-        // .expect("call property mean failed");
-        // let mean_rs = dist_rs.mean();
-        // assert_tensor_eq(py_env.py, &mean_rs, mean_py);
+            // // test property mean
+            // let mean_py = dist_py.getattr("mean")
+            // .expect("call property mean failed");
+            // let mean_rs = dist_rs.mean();
+            // assert_tensor_eq(py_env.py, &mean_rs, mean_py);
 
-        // // test property variance
-        // let variance_py = dist_py.getattr("variance")
-        // .expect("call property variance failed");
-        // let variance_rs = dist_rs.variance();
-        // assert_tensor_eq(py_env.py, &variance_rs, variance_py);
+            // // test property variance
+            // let variance_py = dist_py.getattr("variance")
+            // .expect("call property variance failed");
+            // let variance_rs = dist_rs.variance();
+            // assert_tensor_eq(py_env.py, &variance_rs, variance_py);
 
-        // common test
-        run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
-    }
+            // common test
+            run_test_cases(&py_env, dist_rs, dist_py, &test_cases);
+        }
+    })
 
     // TODO: test kl divergence?
 }
